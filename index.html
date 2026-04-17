@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Recepciones CEDIS</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        .card-pendiente { border-left: 5px solid #ffc107; }
+        .card-completada { border-left: 5px solid #198754; }
+        .producto-item { background: #f8f9fa; margin-bottom: 8px; padding: 12px; border-radius: 10px; }
+        .producto-item.completado { background: #e9f7ef; }
+        .solicitud-meta { font-size: 0.92rem; }
+        .evidencia-box { background: #f8f9fa; border: 1px dashed #ced4da; border-radius: 10px; padding: 12px; }
+        .tab-pane { min-height: 180px; }
+        .evidencia-preview { max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid #dee2e6; border-radius: 8px; padding: 4px; background: #fff; }
+    </style>
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container">
+        <span class="navbar-brand mb-0 h1">OnSupply - Recepcion CEDIS</span>
+    </div>
+</nav>
+
+<div class="container pb-5">
+    <div class="card mb-4 shadow-sm border-0">
+        <div class="card-body">
+            <ul class="nav nav-tabs" id="recepcionesTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="nueva-tab" data-bs-toggle="tab" data-bs-target="#nueva-solicitud" type="button" role="tab">Nueva solicitud</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pendientes-tab" data-bs-toggle="tab" data-bs-target="#pendientes" type="button" role="tab">Pendientes <span class="badge bg-warning text-dark ms-1" id="badgePendientes">0</span></button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="concluidas-tab" data-bs-toggle="tab" data-bs-target="#concluidas" type="button" role="tab">Concluidas <span class="badge bg-success ms-1" id="badgeConcluidas">0</span></button>
+                </li>
+            </ul>
+
+            <div class="tab-content pt-4">
+                <div class="tab-pane fade show active" id="nueva-solicitud" role="tabpanel">
+                    <div class="row g-3 mb-2">
+                        <div class="col-md-4">
+                            <label class="form-label">Folio o movimiento (opcional)</label>
+                            <input type="text" id="folioManual" class="form-control" placeholder="Ej. MOV-1234">
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label">Notas</label>
+                            <input type="text" id="notaSolicitud" class="form-control" placeholder="Opcional: agrega contexto de la solicitud">
+                        </div>
+                    </div>
+
+                    <div id="listaProductosInputs">
+                        <label class="form-label">Articulos a solicitar:</label>
+                        <div class="input-group mb-2">
+                            <input type="text" class="form-control prod-nombre" placeholder="Nombre del articulo">
+                            <button type="button" class="btn btn-outline-secondary" onclick="agregarCampoProducto()">+</button>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-success w-100 mt-3" onclick="enviarSolicitud()">Registrar solicitud</button>
+                </div>
+
+                <div class="tab-pane fade" id="pendientes" role="tabpanel">
+                    <div id="contenedorPendientes" class="row g-3">
+                        <div class="col-12"><p class="text-muted text-center mb-0">Cargando datos...</p></div>
+                    </div>
+                </div>
+
+                <div class="tab-pane fade" id="concluidas" role="tabpanel">
+                    <div id="contenedorConcluidas" class="row g-3">
+                        <div class="col-12"><p class="text-muted text-center mb-0">Cargando datos...</p></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyP3_hjC1u-ygqBxCo-QPSNJhjtwNIu0XsdqWEi7mY4Yvwc-CzqcG4n07mSH5XduY5s/exec";
+let solicitudes = [];
+
+window.addEventListener('load', cargarDatos);
+
+function swalDisponible() {
+    return typeof Swal !== 'undefined';
+}
+
+function notificar(tipo, titulo, mensaje) {
+    if (swalDisponible()) {
+        return Swal.fire(titulo, mensaje, tipo);
+    }
+    if (tipo === 'error') {
+        console.error(titulo + ': ' + mensaje);
+    }
+    alert(titulo + ': ' + mensaje);
+    return Promise.resolve();
+}
+
+function loading(titulo) {
+    if (swalDisponible()) {
+        Swal.fire({ title: titulo, didOpen: () => Swal.showLoading(), allowOutsideClick: false });
+    }
+}
+
+function closeLoading() {
+    if (swalDisponible()) {
+        Swal.close();
+    }
+}
+
+async function cargarDatos() {
+    try {
+        const response = await fetch(SCRIPT_URL);
+        if (!response.ok) throw new Error('Error en servidor');
+
+        const datos = await response.json();
+        console.log("GET response:", datos);
+
+        if (datos.status !== 'success') {
+            throw new Error(datos.message || 'Error al cargar');
+        }
+
+        solicitudes = Array.isArray(datos.data) ? datos.data : [];
+        renderizarPaneles();
+
+        const pendientes = solicitudes.filter(s => String(s.estado || '').toLowerCase() === 'pendiente');
+        if (pendientes.length > 0 && swalDisponible()) {
+            Swal.fire({
+                title: 'Seguimiento pendiente',
+                text: `Tienes ${pendientes.length} solicitudes sin recibir.`,
+                icon: 'warning',
+                confirmButtonText: 'Revisar ahora'
+            });
+        }
+    } catch (e) {
+        console.error(e);
+        const contPend = document.getElementById('contenedorPendientes');
+        const contConc = document.getElementById('contenedorConcluidas');
+        if (contPend) contPend.innerHTML = '<div class="col-12"><p class="text-danger text-center mb-0">No se pudieron cargar los pendientes.</p></div>';
+        if (contConc) contConc.innerHTML = '<div class="col-12"><p class="text-danger text-center mb-0">No se pudieron cargar las concluidas.</p></div>';
+        notificar('error', 'Error', e.message || 'No se pudieron cargar los datos');
+    }
+}
+
+async function enviarSolicitud() {
+    const productos = Array.from(document.querySelectorAll('.prod-nombre'))
+        .map(i => i.value.trim())
+        .filter(Boolean);
+
+    if (productos.length === 0) {
+        return notificar('error', 'Error', 'Agrega al menos un producto');
+    }
+
+    const payload = {
+        action: 'crear',
+        folio: (document.getElementById('folioManual')?.value || '').trim(),
+        nota: (document.getElementById('notaSolicitud')?.value || '').trim(),
+        productos: productos
+    };
+
+    loading('Guardando...');
+
+    try {
+        await postToScript(payload);
+
+        closeLoading();
+        await notificar('success', 'Exito', 'Solicitud registrada');
+
+        limpiarFormulario();
+        cargarDatos();
+        const tab = document.querySelector('#pendientes-tab');
+        if (tab && window.bootstrap) {
+            bootstrap.Tab.getOrCreateInstance(tab).show();
+        }
+    } catch (e) {
+        closeLoading();
+        notificar('error', 'Error', 'No se pudo guardar');
+    }
+}
+
+function limpiarFormulario() {
+    const folio = document.getElementById('folioManual');
+    const nota = document.getElementById('notaSolicitud');
+    if (folio) folio.value = '';
+    if (nota) nota.value = '';
+
+    const lista = document.getElementById('listaProductosInputs');
+    if (!lista) return;
+
+    lista.innerHTML = `
+        <label class="form-label">Articulos a solicitar:</label>
+        <div class="input-group mb-2">
+            <input type="text" class="form-control prod-nombre" placeholder="Nombre del articulo">
+            <button type="button" class="btn btn-outline-secondary" onclick="agregarCampoProducto()">+</button>
+        </div>
+    `;
+}
+
+function agregarCampoProducto() {
+    const div = document.createElement('div');
+    div.className = 'input-group mb-2';
+    div.innerHTML = `
+        <input type="text" class="form-control prod-nombre" placeholder="Nombre del articulo">
+        <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">-</button>
+    `;
+    document.getElementById('listaProductosInputs')?.appendChild(div);
+}
+
+async function subirImagen(file) {
+    const base64 = await convertirBase64(file);
+
+    const data = await postToScript({
+        action: 'subirImagen',
+        file: base64,
+        nombre: file.name
+    });
+
+    if (!data || !data.url) throw new Error('No se pudo subir imagen');
+    return data.url;
+}
+
+async function capturarEvidenciaArchivo(folio, input) {
+    const solicitud = solicitudes.find(s => String(s.folio) === String(folio));
+    if (!solicitud) return;
+
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    if (!file) return;
+
+    loading('Subiendo...');
+
+    try {
+        const url = await subirImagen(file);
+        solicitud.evidenciaUrl = url;
+        closeLoading();
+        renderizarPaneles();
+    } catch (e) {
+        closeLoading();
+        notificar('error', 'Error', e.message || 'No se pudo subir imagen');
+    }
+}
+
+async function marcarRecepcion(folio) {
+    const solicitud = solicitudes.find(s => String(s.folio) === String(folio));
+    if (!solicitud) return;
+
+    const productos = Array.isArray(solicitud.productos) ? solicitud.productos : [];
+    const todos = productos.length > 0 && productos.every(p => p.recibido);
+
+    if (!todos) {
+        return notificar('error', 'Error', 'Marca todos los productos');
+    }
+
+    if (!solicitud.evidenciaUrl) {
+        return notificar('error', 'Error', 'Sube evidencia');
+    }
+
+    if (!esUrlAbsoluta(solicitud.evidenciaUrl)) {
+        return notificar('error', 'Error', 'La evidencia no tiene una URL valida. Sube la imagen nuevamente.');
+    }
+
+    loading('Guardando...');
+
+    try {
+        const resultado = await postToScript({
+            action: 'completar',
+            folio: folio,
+            evidenciaUrl: solicitud.evidenciaUrl,
+            productos: productos
+        });
+
+        if (resultado && resultado.status && resultado.status !== 'success') {
+            throw new Error(resultado.message || 'No se pudo completar');
+        }
+
+        closeLoading();
+        await notificar('success', 'Exito', 'Recepcion completada');
+        cargarDatos();
+    } catch (e) {
+        closeLoading();
+        notificar('error', 'Error', 'No se pudo completar');
+    }
+}
+
+function cambiarProducto(folio, index, recibido) {
+    const s = solicitudes.find(item => String(item.folio) === String(folio));
+    if (!s || !Array.isArray(s.productos) || !s.productos[index]) return;
+
+    s.productos[index].recibido = recibido;
+    renderizarPaneles();
+}
+
+function convertirBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+async function postToScript(payload) {
+    console.log("SCRIPT_URL:", SCRIPT_URL);
+    console.log("PAYLOAD:", payload);
+
+    const res = await fetch(SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+        throw new Error(`Error HTTP ${res.status}`);
+    }
+
+    const text = await res.text();
+    console.log("RESPUESTA RAW:", text);
+
+    if (!text) {
+        throw new Error('Respuesta vacia del Apps Script');
+    }
+
+    if (/<!doctype html>|<html/i.test(text)) {
+        throw new Error('El Web App devolvio HTML en lugar de JSON. Revisa deployment publico y URL /exec.');
+    }
+
+    const data = JSON.parse(text);
+
+    if (data && data.status === 'error') {
+        throw new Error(
+            (data.message || 'Error reportado por Apps Script') +
+            ` | version=${data.version || 'sin_version'}` +
+            ` | effectiveUser=${data.effectiveUser || 'sin_usuario'}`
+        );
+    }
+
+    return data;
+}
+
+function renderizarPaneles() {
+    const pendientes = solicitudes.filter(s => String(s.estado || '').toLowerCase() === 'pendiente');
+    const concluidas = solicitudes.filter(s => String(s.estado || '').toLowerCase() === 'recibido');
+
+    const badgePend = document.getElementById('badgePendientes');
+    const badgeConc = document.getElementById('badgeConcluidas');
+    const contPend = document.getElementById('contenedorPendientes');
+    const contConc = document.getElementById('contenedorConcluidas');
+
+    if (badgePend) badgePend.textContent = pendientes.length;
+    if (badgeConc) badgeConc.textContent = concluidas.length;
+
+    if (contPend) {
+        contPend.innerHTML = pendientes.map(renderPendiente).join('') || '<div class="col-12"><p class="text-center mb-0">Sin pendientes</p></div>';
+    }
+
+    if (contConc) {
+        contConc.innerHTML = concluidas.map(renderConcluida).join('') || '<div class="col-12"><p class="text-center mb-0">Sin concluidas</p></div>';
+    }
+}
+
+function renderPendiente(s) {
+    const id = String(s.folio || '');
+    const nota = String(s.nota || '').trim();
+    const productos = Array.isArray(s.productos) ? s.productos : [];
+    const evidenciaOk = Boolean(s.evidenciaUrl);
+    const evidenciaImg = evidenciaOk && esUrlAbsoluta(s.evidenciaUrl) ? obtenerUrlImagenVisible(s.evidenciaUrl) : '';
+    const todos = productos.length > 0 && productos.every(p => p.recibido);
+
+    return `
+    <div class="col-md-6">
+        <div class="card p-3 card-pendiente h-100">
+            <div class="d-flex justify-content-between align-items-start">
+                <h5 class="mb-1">${escapeHtml(id || 'Sin folio')}</h5>
+                <span class="badge bg-warning text-dark">Pendiente</span>
+            </div>
+            <p class="solicitud-meta text-muted mb-2">${s.fecha ? new Date(s.fecha).toLocaleDateString() : 'Sin fecha'}</p>
+            <p class="mb-2"><strong>Nota:</strong> ${nota ? escapeHtml(nota) : 'Sin nota'}</p>
+
+            ${productos.length ? productos.map((p, i) => `
+                <div class="producto-item ${p.recibido ? 'completado' : ''}">
+                    <input type="checkbox" ${p.recibido ? 'checked' : ''}
+                        onchange="cambiarProducto('${escapeJs(id)}', ${i}, this.checked)">
+                    ${escapeHtml(p.nombre || '')}
+                </div>
+            `).join('') : '<p class="text-muted">Sin productos</p>'}
+
+            <div class="evidencia-box mb-2">
+                <label class="form-label mb-1">Evidencia</label>
+                <input type="file" id="evidenciaFile-${escapeHtml(id).replace(/[^a-zA-Z0-9_-]/g, '_')}" class="form-control" accept="image/*" onchange="capturarEvidenciaArchivo('${escapeJs(id)}', this)">
+                <small class="text-muted">${evidenciaOk ? 'Imagen cargada' : 'Sin imagen'}</small>
+                ${evidenciaImg ? `<div class="mt-2"><img src="${escapeHtml(evidenciaImg)}" alt="Evidencia" class="evidencia-preview" onerror="this.style.display='none'"></div>` : ''}
+            </div>
+
+            <button class="btn btn-success mt-2" ${(!todos || !evidenciaOk) ? 'disabled' : ''}
+                onclick="marcarRecepcion('${escapeJs(id)}')">
+                Completar
+            </button>
+        </div>
+    </div>`;
+}
+
+function renderConcluida(s) {
+    const id = String(s.folio || '');
+    const nota = String(s.nota || '').trim();
+    const evidencia = String(s.evidenciaUrl || '').trim();
+    const evidenciaImg = evidencia && esUrlAbsoluta(evidencia) ? obtenerUrlImagenVisible(evidencia) : '';
+
+    return `
+    <div class="col-md-6">
+        <div class="card p-3 card-completada h-100">
+            <h5>${escapeHtml(id || 'Sin folio')}</h5>
+            <p class="mb-2"><strong>Nota:</strong> ${nota ? escapeHtml(nota) : 'Sin nota'}</p>
+            <p class="mb-2"><strong>Evidencia:</strong> ${evidencia ? (esUrlAbsoluta(evidencia) ? `<a href="${escapeHtml(evidencia)}" target="_blank" rel="noopener noreferrer">Abrir evidencia</a>` : `Archivo: ${escapeHtml(evidencia)} (sin URL publica)`) : 'Sin evidencia'}</p>
+            ${evidenciaImg ? `<img src="${escapeHtml(evidenciaImg)}" alt="Evidencia de ${escapeHtml(id)}" class="evidencia-preview" onerror="this.insertAdjacentHTML('afterend','<small class=\"text-danger\">No se pudo visualizar la imagen. Usa el enlace para abrirla.</small>'); this.remove();">` : ''}
+        </div>
+    </div>`;
+}
+
+function esUrlAbsoluta(valor) {
+    const texto = String(valor || '').trim();
+    return /^https?:\/\//i.test(texto);
+}
+
+function obtenerUrlImagenVisible(url) {
+    const texto = String(url || '').trim();
+    if (!texto) return '';
+
+    const idPorRuta = texto.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (idPorRuta && idPorRuta[1]) {
+        return `https://drive.google.com/uc?export=view&id=${idPorRuta[1]}`;
+    }
+
+    const idPorQuery = texto.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (idPorQuery && idPorQuery[1]) {
+        return `https://drive.google.com/uc?export=view&id=${idPorQuery[1]}`;
+    }
+
+    return texto;
+}
+
+function escapeHtml(texto) {
+    return String(texto ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function escapeJs(texto) {
+    return String(texto ?? '').replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+}
+</script>
+</body>
+</html>
