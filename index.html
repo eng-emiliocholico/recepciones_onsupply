@@ -60,6 +60,19 @@
                         </div>
                     </div>
 
+                    <div class="evidencia-box mt-3">
+                        <label class="form-label mb-1">Evidencia inicial (opcional)</label>
+                        <div class="d-flex flex-wrap gap-2 mb-2">
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="document.getElementById('evidenciaNuevaArchivo')?.click()">Subir archivo</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('evidenciaNuevaCamara')?.click()">Tomar foto</button>
+                            <button type="button" class="btn btn-outline-danger btn-sm" onclick="limpiarEvidenciaNueva()">Quitar</button>
+                        </div>
+                        <input type="file" id="evidenciaNuevaArchivo" class="d-none" accept="image/*" onchange="seleccionarEvidenciaNueva(this)">
+                        <input type="file" id="evidenciaNuevaCamara" class="d-none" accept="image/*" capture="environment" onchange="seleccionarEvidenciaNueva(this)">
+                        <small class="text-muted" id="textoEvidenciaNueva">Sin imagen seleccionada</small>
+                        <div id="previewEvidenciaNueva" class="mt-2"></div>
+                    </div>
+
                     <button class="btn btn-success w-100 mt-3" onclick="enviarSolicitud()">Registrar solicitud</button>
                 </div>
 
@@ -83,6 +96,7 @@
 <script>
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyP3_hjC1u-ygqBxCo-QPSNJhjtwNIu0XsdqWEi7mY4Yvwc-CzqcG4n07mSH5XduY5s/exec";
 let solicitudes = [];
+let evidenciaNuevaSolicitud = null;
 
 window.addEventListener('load', cargarDatos);
 
@@ -156,16 +170,23 @@ async function enviarSolicitud() {
         return notificar('error', 'Error', 'Agrega al menos un producto');
     }
 
-    const payload = {
-        action: 'crear',
-        folio: (document.getElementById('folioManual')?.value || '').trim(),
-        nota: (document.getElementById('notaSolicitud')?.value || '').trim(),
-        productos: productos
-    };
-
-    loading('Guardando...');
-
     try {
+        let evidenciaUrl = '';
+
+        if (evidenciaNuevaSolicitud) {
+            loading('Subiendo evidencia...');
+            evidenciaUrl = await subirImagen(evidenciaNuevaSolicitud);
+        }
+
+        const payload = {
+            action: 'crear',
+            folio: (document.getElementById('folioManual')?.value || '').trim(),
+            nota: (document.getElementById('notaSolicitud')?.value || '').trim(),
+            productos: productos,
+            evidenciaUrl: evidenciaUrl
+        };
+
+        loading('Guardando...');
         await postToScript(payload);
 
         closeLoading();
@@ -188,6 +209,7 @@ function limpiarFormulario() {
     const nota = document.getElementById('notaSolicitud');
     if (folio) folio.value = '';
     if (nota) nota.value = '';
+    limpiarEvidenciaNueva();
 
     const lista = document.getElementById('listaProductosInputs');
     if (!lista) return;
@@ -209,6 +231,39 @@ function agregarCampoProducto() {
         <button type="button" class="btn btn-outline-danger" onclick="this.parentElement.remove()">-</button>
     `;
     document.getElementById('listaProductosInputs')?.appendChild(div);
+}
+
+function seleccionarEvidenciaNueva(input) {
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    if (!file) return;
+
+    evidenciaNuevaSolicitud = file;
+
+    const texto = document.getElementById('textoEvidenciaNueva');
+    const preview = document.getElementById('previewEvidenciaNueva');
+
+    if (texto) {
+        texto.textContent = `Imagen seleccionada: ${file.name}`;
+    }
+
+    if (preview) {
+        const localUrl = URL.createObjectURL(file);
+        preview.innerHTML = `<img src="${escapeHtml(localUrl)}" alt="Vista previa de evidencia" class="evidencia-preview">`;
+    }
+}
+
+function limpiarEvidenciaNueva() {
+    evidenciaNuevaSolicitud = null;
+
+    const inputArchivo = document.getElementById('evidenciaNuevaArchivo');
+    const inputCamara = document.getElementById('evidenciaNuevaCamara');
+    const texto = document.getElementById('textoEvidenciaNueva');
+    const preview = document.getElementById('previewEvidenciaNueva');
+
+    if (inputArchivo) inputArchivo.value = '';
+    if (inputCamara) inputCamara.value = '';
+    if (texto) texto.textContent = 'Sin imagen seleccionada';
+    if (preview) preview.innerHTML = '';
 }
 
 async function subirImagen(file) {
@@ -363,6 +418,7 @@ function renderizarPaneles() {
 
 function renderPendiente(s) {
     const id = String(s.folio || '');
+    const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '_');
     const nota = String(s.nota || '').trim();
     const productos = Array.isArray(s.productos) ? s.productos : [];
     const evidenciaOk = Boolean(s.evidenciaUrl);
@@ -389,7 +445,12 @@ function renderPendiente(s) {
 
             <div class="evidencia-box mb-2">
                 <label class="form-label mb-1">Evidencia</label>
-                <input type="file" id="evidenciaFile-${escapeHtml(id).replace(/[^a-zA-Z0-9_-]/g, '_')}" class="form-control" accept="image/*" onchange="capturarEvidenciaArchivo('${escapeJs(id)}', this)">
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="document.getElementById('evidenciaFile-${escapeHtml(safeId)}')?.click()">Subir archivo</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('evidenciaCam-${escapeHtml(safeId)}')?.click()">Tomar foto</button>
+                </div>
+                <input type="file" id="evidenciaFile-${escapeHtml(safeId)}" class="d-none" accept="image/*" onchange="capturarEvidenciaArchivo('${escapeJs(id)}', this)">
+                <input type="file" id="evidenciaCam-${escapeHtml(safeId)}" class="d-none" accept="image/*" capture="environment" onchange="capturarEvidenciaArchivo('${escapeJs(id)}', this)">
                 <small class="text-muted">${evidenciaOk ? 'Imagen cargada' : 'Sin imagen'}</small>
                 ${evidenciaImg ? `<div class="mt-2"><img src="${escapeHtml(evidenciaImg)}" alt="Evidencia" class="evidencia-preview" onerror="this.style.display='none'"></div>` : ''}
             </div>
