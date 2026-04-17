@@ -13,6 +13,9 @@
         .producto-item.completado { background: #e9f7ef; }
         .solicitud-meta { font-size: 0.92rem; }
         .evidencia-box { background: #f8f9fa; border: 1px dashed #ced4da; border-radius: 10px; padding: 12px; }
+        .seguimiento-box { background: #fff8e6; border: 1px dashed #f0b429; border-radius: 10px; padding: 12px; }
+        .seguimiento-item { background: #ffffff; border: 1px solid #e9ecef; border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+        .seguimiento-texto { white-space: pre-wrap; }
         .tab-pane { min-height: 180px; }
         .evidencia-preview { max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid #dee2e6; border-radius: 8px; padding: 4px; background: #fff; }
     </style>
@@ -95,6 +98,7 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyP3_hjC1u-ygqBxCo-QPSNJhjtwNIu0XsdqWEi7mY4Yvwc-CzqcG4n07mSH5XduY5s/exec";
+const STORAGE_SEGUIMIENTOS = 'recepciones_seguimientos_v1';
 let solicitudes = [];
 let evidenciaNuevaSolicitud = null;
 
@@ -139,7 +143,8 @@ async function cargarDatos() {
             throw new Error(datos.message || 'Error al cargar');
         }
 
-        solicitudes = Array.isArray(datos.data) ? datos.data : [];
+    solicitudes = Array.isArray(datos.data) ? datos.data : [];
+    integrarSeguimientosLocales();
         renderizarPaneles();
 
         const pendientes = solicitudes.filter(s => String(s.estado || '').toLowerCase() === 'pendiente');
@@ -264,6 +269,125 @@ function limpiarEvidenciaNueva() {
     if (inputCamara) inputCamara.value = '';
     if (texto) texto.textContent = 'Sin imagen seleccionada';
     if (preview) preview.innerHTML = '';
+}
+
+function cargarSeguimientosLocales() {
+    try {
+        const raw = localStorage.getItem(STORAGE_SEGUIMIENTOS);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+        console.warn('No se pudieron leer los seguimientos locales', e);
+        return {};
+    }
+}
+
+function guardarSeguimientosLocales(data) {
+    try {
+        localStorage.setItem(STORAGE_SEGUIMIENTOS, JSON.stringify(data || {}));
+    } catch (e) {
+        console.warn('No se pudieron guardar los seguimientos locales', e);
+    }
+}
+
+function integrarSeguimientosLocales() {
+    const locales = cargarSeguimientosLocales();
+
+    solicitudes.forEach(solicitud => {
+        const folio = String(solicitud.folio || '');
+        const localesPorFolio = Array.isArray(locales[folio]) ? locales[folio] : [];
+        const remotos = Array.isArray(solicitud.seguimientos) ? solicitud.seguimientos : [];
+        solicitud.seguimientos = [...remotos, ...localesPorFolio];
+    });
+}
+
+function seleccionarSeguimientoArchivo(folio, input) {
+    const solicitud = solicitudes.find(s => String(s.folio) === String(folio));
+    if (!solicitud) return;
+
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    solicitud.seguimientoNuevoArchivo = file;
+    solicitud.seguimientoNuevoPreview = '';
+
+    if (file) {
+        solicitud.seguimientoNuevoPreview = URL.createObjectURL(file);
+    }
+
+    renderizarPaneles();
+}
+
+function limpiarSeguimientoNuevo(folio) {
+    const solicitud = solicitudes.find(s => String(s.folio) === String(folio));
+    if (!solicitud) return;
+
+    if (solicitud.seguimientoNuevoPreview) {
+        try {
+            URL.revokeObjectURL(solicitud.seguimientoNuevoPreview);
+        } catch (e) {
+            console.warn('No se pudo liberar la vista previa', e);
+        }
+    }
+
+    solicitud.seguimientoNuevoArchivo = null;
+    solicitud.seguimientoNuevoPreview = '';
+
+    const texto = document.getElementById(`seguimientoTexto-${escapeHtml(String(folio).replace(/[^a-zA-Z0-9_-]/g, '_'))}`);
+    const archivo = document.getElementById(`seguimientoArchivo-${escapeHtml(String(folio).replace(/[^a-zA-Z0-9_-]/g, '_'))}`);
+    const camara = document.getElementById(`seguimientoCamara-${escapeHtml(String(folio).replace(/[^a-zA-Z0-9_-]/g, '_'))}`);
+    if (archivo) archivo.value = '';
+    if (camara) camara.value = '';
+    if (texto) texto.textContent = 'Sin imagen seleccionada';
+    renderizarPaneles();
+}
+
+async function guardarSeguimiento(folio) {
+    const solicitud = solicitudes.find(s => String(s.folio) === String(folio));
+    if (!solicitud) return;
+
+    const safeId = String(folio).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const nota = (document.getElementById(`seguimientoNota-${safeId}`)?.value || '').trim();
+    const archivo = solicitud.seguimientoNuevoArchivo || null;
+
+    if (!nota && !archivo) {
+        return notificar('error', 'Error', 'Agrega una nota o una imagen para guardar el seguimiento');
+    }
+
+    loading('Guardando seguimiento...');
+
+    try {
+        let evidenciaUrl = '';
+
+        if (archivo) {
+            evidenciaUrl = await subirImagen(archivo);
+        }
+
+        const seguimiento = {
+            fecha: new Date().toISOString(),
+            nota: nota,
+            evidenciaUrl: evidenciaUrl
+        };
+
+        const locales = cargarSeguimientosLocales();
+        const folioClave = String(folio);
+        if (!Array.isArray(locales[folioClave])) {
+            locales[folioClave] = [];
+        }
+        locales[folioClave].push(seguimiento);
+        guardarSeguimientosLocales(locales);
+
+        if (!Array.isArray(solicitud.seguimientos)) {
+            solicitud.seguimientos = [];
+        }
+        solicitud.seguimientos.push(seguimiento);
+
+        limpiarSeguimientoNuevo(folio);
+        closeLoading();
+        await notificar('success', 'Exito', 'Seguimiento guardado');
+        renderizarPaneles();
+    } catch (e) {
+        closeLoading();
+        notificar('error', 'Error', e.message || 'No se pudo guardar el seguimiento');
+    }
 }
 
 async function subirImagen(file) {
@@ -421,6 +545,7 @@ function renderPendiente(s) {
     const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '_');
     const nota = String(s.nota || '').trim();
     const productos = Array.isArray(s.productos) ? s.productos : [];
+    const seguimientos = Array.isArray(s.seguimientos) ? s.seguimientos : [];
     const evidenciaOk = Boolean(s.evidenciaUrl);
     const evidenciaImg = evidenciaOk && esUrlAbsoluta(s.evidenciaUrl) ? obtenerUrlImagenVisible(s.evidenciaUrl) : '';
     const todos = productos.length > 0 && productos.every(p => p.recibido);
@@ -442,6 +567,38 @@ function renderPendiente(s) {
                     ${escapeHtml(p.nombre || '')}
                 </div>
             `).join('') : '<p class="text-muted">Sin productos</p>'}
+
+            <div class="seguimiento-box mb-2">
+                <label class="form-label mb-1">Agregar seguimiento</label>
+                <textarea id="seguimientoNota-${safeId}" class="form-control mb-2" rows="2" placeholder="Ej. No se ha recibido el producto, se está revisando con almacén..."></textarea>
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="document.getElementById('seguimientoArchivo-${safeId}')?.click()">Subir archivo</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('seguimientoCamara-${safeId}')?.click()">Tomar foto</button>
+                    <button type="button" class="btn btn-outline-danger btn-sm" onclick="limpiarSeguimientoNuevo('${escapeJs(id)}')">Quitar imagen</button>
+                </div>
+                <input type="file" id="seguimientoArchivo-${safeId}" class="d-none" accept="image/*" onchange="seleccionarSeguimientoArchivo('${escapeJs(id)}', this)">
+                <input type="file" id="seguimientoCamara-${safeId}" class="d-none" accept="image/*" capture="environment" onchange="seleccionarSeguimientoArchivo('${escapeJs(id)}', this)">
+                <small class="text-muted d-block" id="seguimientoTexto-${safeId}">${s.seguimientoNuevoArchivo ? s.seguimientoNuevoArchivo.name : 'Sin imagen seleccionada'}</small>
+                ${s.seguimientoNuevoPreview ? `<div class="mt-2"><img src="${escapeHtml(s.seguimientoNuevoPreview)}" alt="Vista previa de seguimiento" class="evidencia-preview"></div>` : ''}
+                <button type="button" class="btn btn-warning mt-2" onclick="guardarSeguimiento('${escapeJs(id)}')">Guardar seguimiento</button>
+            </div>
+
+            <div class="mb-2">
+                <label class="form-label mb-1">Historial de seguimiento</label>
+                ${seguimientos.length ? seguimientos.map(seg => {
+                    const fechaSeg = seg.fecha ? new Date(seg.fecha).toLocaleString() : 'Sin fecha';
+                    const evidenciaSeg = seg.evidenciaUrl && esUrlAbsoluta(seg.evidenciaUrl) ? obtenerUrlImagenVisible(seg.evidenciaUrl) : '';
+                    return `
+                        <div class="seguimiento-item">
+                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                <small class="text-muted">${escapeHtml(fechaSeg)}</small>
+                            </div>
+                            <div class="seguimiento-texto mt-1">${seg.nota ? escapeHtml(seg.nota) : '<span class="text-muted">Sin nota</span>'}</div>
+                            ${evidenciaSeg ? `<div class="mt-2"><img src="${escapeHtml(evidenciaSeg)}" alt="Seguimiento" class="evidencia-preview"></div>` : ''}
+                        </div>
+                    `;
+                }).join('') : '<p class="text-muted mb-0">Sin seguimientos aún</p>'}
+            </div>
 
             <div class="evidencia-box mb-2">
                 <label class="form-label mb-1">Evidencia</label>
